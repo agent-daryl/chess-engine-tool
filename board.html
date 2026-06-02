@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Qwen Chess</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: monospace; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
+h1 { padding: 15px 0 5px; color: #16c79a; font-size: 1.4em; }
+#status-bar { font-size: 1.1em; padding: 8px; text-align: center; min-height: 2em; color: #16c79a; }
+.board-wrapper { display: flex; flex-direction: column; align-items: center; user-select: none; }
+.board-row { display: flex; }
+.square { width: 72px; height: 72px; display: flex; align-items: center; justify-content: center; font-size: 42px; cursor: pointer; border: 2px solid transparent; transition: all 0.12s; }
+.square.light { background: #e8d4b2; }
+.square.dark { background: #b58863; }
+.square .piece { color: #000; }
+.square.selected { border: 3px solid #ffe066; border-radius: 4px; }
+.square.legal-target { position: relative; }
+.square.legal-target::after { content: ''; position: absolute; width: 18px; height: 18px; background: rgba(23, 184, 147, 0.45); border-radius: 50%; }
+.square.legal-capture { position: relative; }
+.square.legal-capture::after { content: ''; position: absolute; width: 66px; height: 66px; border: 5px solid rgba(23, 184, 147, 0.5); border-radius: 50%; }
+.square.check-highlight { background: #f56565 !important; }
+.square:hover { filter: brightness(1.15); }
+.rank-label { width: 28px; display: flex; align-items: center; justify-content: center; font-size: 14px; color: #999; }
+.file-row { display: flex; padding-left: 28px; }
+.file-label { width: 72px; text-align: center; font-size: 14px; color: #999; }
+.controls { margin: 15px 0; display: flex; gap: 15px; flex-wrap: wrap; justify-content: center; }
+.controls button { padding: 10px 22px; font-family: monospace; font-size: 15px; border: 2px solid #16c79a; background: transparent; color: #16c79a; border-radius: 6px; cursor: pointer; }
+.controls button:hover { background: #16c79a22; }
+.controls button:disabled { opacity: 0.4; cursor: default; }
+.controls select { padding: 6px 10px; font-family: monospace; background: #16213e; color: #16c79a; border: 2px solid #16c79a; border-radius: 6px; }
+.controls label { font-size: 14px; display: flex; align-items: center; gap: 6px; }
+#board-log { background: #16213e; border: 1px solid #333; border-radius: 8px; padding: 10px 14px; margin: 10px 0 20px; width: 580px; max-height: 200px; overflow-y: auto; font-size: 13px; line-height: 1.6; }
+#board-log .move-entry { color: #e0e0e0; }
+#board-log .my-move { color: #16c79a; }
+#board-log .ai-move { color: #60a5fa; }
+#board-log .system-msg { color: #f59e0b; }
+.thinking { animation: pulse 1s infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+.game-over-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 99; }
+.game-over-box { background: #16213e; border: 3px solid #16c79a; border-radius: 12px; padding: 40px 60px; text-align: center; }
+.game-over-box h2 { color: #16c79a; margin-bottom: 12px; font-size: 1.6em; }
+.game-over-box p { font-size: 1.1em; color: #ccc; }
+</style>
+</head>
+<body>
+<h1>♟ Qwen Chess</h1>
+<div id="status-bar">Loading...</div>
+<div class="board-wrapper">
+  <div id="board"></div>
+  <div class="file-row" id="file-labels"></div>
+</div>
+<div class="controls">
+  <button id="btn-newgame">New Game</button>
+  <label>Player:
+    <select id="sel-color">
+      <option value="white" selected>White (you move first)</option>
+      <option value="black">Black</option>
+    </select>
+  </label>
+  <label>AI Depth:
+    <select id="sel-depth">
+      <option value="3">3 (fast)</option>
+      <option value="4" selected>4 (default)</option>
+      <option value="5">5 (slower, better)</option>
+    </select>
+  </label>
+</div>
+<div id="board-log"></div>
+
+<script>
+const SERVER = "http://10.10.0.100:8081";
+const PIECES = {
+  "K": "♔", "Q": "♕", "R": "♖", "B": "♗", "N": "♘", "P": "♙",
+  "k": "♚", "q": "♛", "r": "♜", "b": "♝", "n": "♞", "p": "♟",
+};
+let fen = "";
+let board = [];
+let selectedSquare = null;
+let legalTargets = new Set();
+let playerColor = "white";
+let aiThinking = false;
+let gameStatus = "in_progress";
+
+async function api(path, method = "GET", body = null) {
+  const opts = {
+    method,
+    headers: { "Content-Type": "application/json" },
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(SERVER + path, opts);
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({"error": "Unknown"}));
+    alert(e.error || "Server error");
+    return null;
+  }
+  return r.json();
+}
+
+function parseFEN(fenStr) {
+  const rows = fenStr.split(" ")[0].split("/");
+  const grid = [];
+  for (const row of rows) {
+    const line = [];
+    for (const ch of row) {
+      if (/\d/.test(ch)) {
+        for (let i = 0; i < parseInt(ch); i++) line.push(null);
+      } else {
+        line.push(ch);
+      }
+    }
+    grid.push(line);
+  }
+  return grid;
+}
+
+function renderBoard(legalUCI = []) {
+  const boardDiv = document.getElementById("board");
+  boardDiv.innerHTML = "";
+  const files = "abcdefgh";
+  for (let row = 0; row < 8; row++) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "board-row";
+    const rank = document.createElement("div");
+    rank.className = "rank-label";
+    rank.textContent = 8 - row;
+    wrapper.appendChild(rank);
+    for (let col = 0; col < 8; col++) {
+      const sq = document.createElement("div");
+      const isLight = (row + col) % 2 === 0;
+      sq.className = `square ${isLight ? "light" : "dark"}`;
+      const sqName = String.fromCharCode(97 + col) + (8 - row);
+      sq.dataset.square = sqName;
+      const piece = board[row][col];
+      if (piece) {
+        const pieceEl = document.createElement("span");
+        pieceEl.className = "piece";
+        pieceEl.textContent = PIECES[piece] || "";
+        sq.appendChild(pieceEl);
+      }
+      sq.addEventListener("click", () => onSquareClick(sqName, sq));
+      wrapper.appendChild(sq);
+    }
+    boardDiv.appendChild(wrapper);
+  }
+  const fileRow = document.getElementById("file-labels");
+  fileRow.innerHTML = "";
+  for (const f of files) {
+    const lbl = document.createElement("div");
+    lbl.className = "file-label";
+    lbl.textContent = f;
+    fileRow.appendChild(lbl);
+  }
+}
+
+async function onSquareClick(sqName, el) {
+  if (aiThinking || gameStatus !== "in_progress") return;
+
+  if (selectedSquare === null) {
+    const row = 8 - parseInt(sqName[1]);
+    const col = sqName.charCodeAt(0) - 97;
+    const piece = board[row][col];
+    if (!piece) return;
+    const pieceColor = piece === piece.toUpperCase() ? "white" : "black";
+    if (pieceColor !== playerColor) {
+      logMsg(`Select your own piece (${playerColor})`);
+      return;
+    }
+    selectedSquare = sqName;
+    el.classList.add("selected");
+    const state = await api("/state");
+    if (!state) return;
+    legalTargets.clear();
+    for (const uci of (state.legal_uci_moves || [])) {
+      if (uci.substring(0, 2) === sqName) {
+        const targetSq = uci.substring(2, 4);
+        legalTargets.add(targetSq);
+        const tgtEl = document.querySelector(`[data-square="${targetSq}"]`);
+        if (tgtEl) {
+          tgtEl.classList.add(board[8 - parseInt(targetSq[1])][targetSq.charCodeAt(0) - 97] ? "legal-capture" : "legal-target");
+        }
+      }
+    }
+    return;
+  }
+
+  if (legalTargets.has(sqName)) {
+    const uci = selectedSquare + sqName;
+    clearSelection();
+    await submitMove(uci);
+  } else if (selectedSquare === sqName) {
+    clearSelection();
+  } else {
+    const row = 8 - parseInt(sqName[1]);
+    const col = sqName.charCodeAt(0) - 97;
+    const piece = board[row][col];
+    if (piece) {
+      const pieceColor = piece === piece.toUpperCase() ? "white" : "black";
+      if (pieceColor === playerColor) {
+        clearSelection();
+        await onSquareClick(sqName, el);
+      }
+    } else {
+      clearSelection();
+    }
+  }
+}
+
+function clearSelection() {
+  document.querySelectorAll(".square.selected, .square.legal-target, .square.legal-capture").forEach(el => {
+    el.classList.remove("selected", "legal-target", "legal-capture");
+  });
+  selectedSquare = null;
+  legalTargets.clear();
+}
+
+async function submitMove(uci) {
+  const result = await api("/move", "POST", { move: uci, color: playerColor });
+  if (!result) return;
+  if (result.ok) {
+    fen = result.fen;
+    board = parseFEN(fen);
+    logMsg(`You: ${result.san}`, "my-move");
+    renderBoard();
+    clearSelection();
+    if (result.is_checkmate) {
+      gameStatus = "checkmate";
+      logMsg("CHECKMATE! You win!", "system-msg");
+      showOverlay("Checkmate!", "You win! Well played.");
+      updateStatus("Checkmate — you win!");
+      return;
+    }
+    if (result.is_stalemate) {
+      gameStatus = "stalemate";
+      logMsg("Stalemate — draw!", "system-msg");
+      showOverlay("Draw", "Stalemate.");
+      updateStatus("Stalemate — draw.");
+      return;
+    }
+    if (result.in_check) logMsg("Opponent is in check!", "system-msg");
+    clearSelection();
+    if (true) {
+      setTimeout(() => aiTurn(result), 400);
+    }
+  }
+
+}
+
+async function refreshBoard() {
+  const state = await api("/state");
+  if (state) {
+    fen = state.fen;
+    board = parseFEN(fen);
+    gameStatus = state.status;
+    renderBoard(state.legal_uci_moves || []);
+    if (gameStatus !== "in_progress") {
+      logMsg(`Game over: ${gameStatus}`, "system-msg");
+    }
+    updateStatus(status(state));
+  }
+}
+
+function updateStatus(msg) {
+  const sb = document.getElementById("status-bar");
+  sb.textContent = msg;
+}
+
+function status(state) {
+  if (state.status !== "in_progress") return `Game over: ${state.status}`;
+  const turn = state.turn;
+  const checkNote = state.in_check ? " (CHECK!)" : "";
+  return `Turn: ${turn === playerColor ? "Your move" : "AI thinking..."}${checkNote}`;
+}
+
+async function aiTurn(state = null) {
+
+  aiThinking = true;
+
+  updateStatus("AI is thinking...");
+
+  document.getElementById("status-bar").classList.add("thinking");
+
+  logMsg("AI is thinking...", "ai-move");
+
+  const result = await api("/think", "POST");
+
+  document.getElementById("status-bar").classList.remove("thinking");
+
+  aiThinking = false;
+
+  if (result) {
+    fen = result.fen;
+    board = parseFEN(fen);
+    renderBoard();
+    logMsg(`AI: ${result.san}`, "ai-move");
+    if (result.is_checkmate) {
+      gameStatus = "checkmate";
+
+      logMsg("Checkmate! AI wins.", "system-msg");
+      showOverlay("Checkmate!", "AI wins. Better luck next time.");
+      updateStatus("Checkmate — AI wins.");
+      return;
+    }
+    if (result.is_stalemate) {
+      gameStatus = "stalemate";
+      logMsg("Stalemate — draw!", "system-msg");
+      showOverlay("Draw", "Stalemate.");
+      updateStatus("Stalemate — draw.");
+      return;
+    }
+    if (result.in_check) logMsg("Check!", "system-msg");
+  }
+  refreshBoard();
+}
+
+function logMsg(msg, cls = "") {
+  const log = document.getElementById("board-log");
+  const div = document.createElement("div");
+  div.className = `move-entry ${cls}`;
+  div.textContent = msg;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function showOverlay(title, text) {
+
+  if (document.querySelector(".game-over-overlay")) return;
+  const overlay = document.createElement("div");
+  overlay.className = "game-over-overlay";
+  overlay.innerHTML = `<div class="game-over-box"><h2>${title}</h2><p>${text}</p><p style="margin-top:20px;color:#888;cursor:pointer" onclick="this.parentElement.parentElement.remove()">Dismiss</p></div>`;
+  document.body.appendChild(overlay);
+}
+
+document.getElementById("btn-newgame").addEventListener("click", async () => {
+  await api("/reset", "GET");
+  document.getElementById("board-log").innerHTML = "";
+  logMsg("New game started.", "system-msg");
+  playerColor = document.getElementById("sel-color").value;
+  gameStatus = "in_progress";
+  aiThinking = false;
+  clearSelection();
+  document.getElementById("status-bar").classList.remove("thinking");
+  await refreshBoard();
+});
+
+document.getElementById("sel-color").addEventListener("change", async () => {
+  playerColor = document.getElementById("sel-color").value;
+  await api("/reset", "GET");
+  document.getElementById("board-log").innerHTML = "";
+  logMsg(`New game — you are ${playerColor}.`, "system-msg");
+  if (playerColor === "black") {
+    logMsg("AI makes first move...", "ai-move");
+
+    aiThinking = true;
+
+    updateStatus("AI is thinking...");
+    document.getElementById("status-bar").classList.add("thinking");
+    const result = await api("/think", "POST");
+    document.getElementById("status-bar").classList.remove("thinking");
+    aiThinking = false;
+    if (result) {
+      fen = result.fen;
+      board = parseFEN(fen);
+      renderBoard();
+      logMsg(`AI: ${result.san}`, "ai-move");
+    }
+  }
+});
+
+window.onload = async () => {
+  gameStatus = "in_progress";
+  await api("/reset", "GET");
+  logMsg("Press 'New Game' to start.", "system-msg");
+  await refreshBoard();
+};
+</script>
+</body>
+</html>
