@@ -186,7 +186,20 @@ async function onSquareClick(sqName, el) {
   }
 
   if (legalTargets.has(sqName)) {
-    const uci = selectedSquare + sqName;
+    let uci = selectedSquare + sqName;
+    // Handle pawn promotion
+    const row = 8 - parseInt(sqName[1]);
+    const col = sqName.charCodeAt(0) - 97;
+    const piece = board[row][col];
+    if (piece === "P" || piece === "p") {
+      const isWhitePromo = piece === "P" && row === 0;
+      const isBlackPromo = piece === "p" && row === 7;
+      if (isWhitePromo || isBlackPromo) {
+        const promotion = prompt("Promote pawn? Enter Q, R, B, or N:", "Q");
+        if (!promotion) return;
+        uci += promotion.toLowerCase();
+      }
+    }
     clearSelection();
     await submitMove(uci);
   } else if (selectedSquare === sqName) {
