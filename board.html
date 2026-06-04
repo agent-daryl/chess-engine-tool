@@ -63,7 +63,17 @@ h1 { padding: 15px 0 5px; color: #16c79a; font-size: 1.4em; }
     <select id="sel-depth">
       <option value="3">3 (fast)</option>
       <option value="4" selected>4 (default)</option>
-      <option value="5">5 (slower, better)</option>
+      <option value="5">5 (better)</option>
+      <option value="6">6</option>
+      <option value="7">7</option>
+      <option value="8">8</option>
+      <option value="9">9</option>
+      <option value="10">10</option>
+      <option value="11">11</option>
+      <option value="12">12</option>
+      <option value="13">13</option>
+      <option value="14">14</option>
+      <option value="15">15 (max, very slow)</option>
     </select>
   </label>
 </div>
@@ -369,7 +379,8 @@ document.getElementById("sel-color").addEventListener("change", async () => {
 
     updateStatus("AI is thinking...");
     document.getElementById("status-bar").classList.add("thinking");
-    const result = await api("/think", "POST");
+ const depth = document.getElementById("sel-depth").value;
+  const result = await api("/think", "POST", { depth: parseInt(depth) });
     document.getElementById("status-bar").classList.remove("thinking");
     aiThinking = false;
     if (result) {

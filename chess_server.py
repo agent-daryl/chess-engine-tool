@@ -113,7 +113,14 @@ class ChessHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         # Routes that don't need a body
         if self.path == "/think":
-            self._do_think()
+            length_str = self.headers.get("Content-Length")
+            if length_str is not None:
+                length = int(length_str)
+                raw = self.rfile.read(length)
+            else:
+                raw = b""
+            payload = json.loads(raw) if raw else {}
+            self._do_think(payload.get("depth", 4))
             return
         if self.path == "/reset":
             with game_state["lock"]:
@@ -161,7 +168,7 @@ class ChessHandler(BaseHTTPRequestHandler):
             self._apply_move(move_san, color_str, uci=False)
 
         elif self.path == "/think":
-            self._do_think()
+            self._do_think(payload.get("depth", 4))
 
         elif self.path == "/reset":
             with game_state["lock"]:
@@ -209,7 +216,7 @@ class ChessHandler(BaseHTTPRequestHandler):
                 "move_count": len(game_state["move_history"]),
             })
 
-    def _do_think(self):
+    def _do_think(self, depth=4):
         """Run evaluator to find best move, apply it, return result."""
         with game_state["lock"]:
             b = game_state["board"]
@@ -221,8 +228,8 @@ class ChessHandler(BaseHTTPRequestHandler):
 
         evaluator = os.path.join(SCRIPT_DIR, "chess_evaluator.py")
         result = subprocess.run(
-            [sys.executable, evaluator, "--fen", fen, "--depth", "4", "--json"],
-            capture_output=True, text=True, timeout=120,
+            [sys.executable, evaluator, "--fen", fen, "--depth", str(depth), "--json"],
+            capture_output=True, text=True, timeout=300,
         )
         if result.returncode != 0:
             self._send_json({"error": f"evaluator failed: {result.stderr}"})
