@@ -19,7 +19,7 @@ from multiprocessing import Pool, cpu_count
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
 
-MAX_WORKERS = cpu_count()  # Uses all available cores (40 on RHEL host)
+MAX_WORKERS = 34  # Reserve 6 cores for host/opencode
 
 
 # ── Piece-square tables (from Classic Chess Engine, inverted for black) ──
