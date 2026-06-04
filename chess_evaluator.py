@@ -15,12 +15,11 @@ Usage from the AI agent or CLI:
 import argparse
 import sys
 import chess
-import chess.engine
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from multiprocessing import Pool, cpu_count
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
 
-MAX_WORKERS = 8
+MAX_WORKERS = cpu_count()  # Uses all available cores (40 on RHEL host)
 
 
 # ── Piece-square tables (from Classic Chess Engine, inverted for black) ──
@@ -182,12 +181,15 @@ def minimax_node(board: chess.Board, depth: int, alpha: int, beta: int, maximizi
         return best
 
 
-def evaluate_move(board: chess.Board, move: chess.Move, depth: int):
-    """Evaluate a single move in isolation (for parallel search)."""
+def evaluate_move_worker(args):
+    """Worker function for multiprocessing. Receives (fen, uci_move, depth)."""
+    board = chess.Board(args[0])
+    move = chess.Move.from_uci(args[1])
+    depth = args[2]
     board.push(move)
     val = minimax_node(board, depth - 1, float('-inf'), float('inf'), board.turn == chess.WHITE)
     board.pop()
-    return move, val
+    return move.uci(), val
 
 
 def best_move(fen: str, depth: int = 3, max_workers: int = MAX_WORKERS) -> dict:
@@ -206,15 +208,12 @@ def best_move(fen: str, depth: int = 3, max_workers: int = MAX_WORKERS) -> dict:
     moves = list(board.legal_moves)
     move_values = []
 
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = []
-        for move in moves:
-            future = pool.submit(evaluate_move, board.copy(), move, depth)
-            futures.append(future)
+    # Prepare args for multiprocessing workers (FEN string + UCI move + depth)
+    worker_args = [(fen, move.uci(), depth) for move in moves]
 
-        for future in as_completed(futures):
-            mv, val = future.result()
-            move_values.append((mv, val))
+    with Pool(processes=max_workers) as pool:
+        for uci, val in pool.imap_unordered(evaluate_move_worker, worker_args):
+            move_values.append((chess.Move.from_uci(uci), val))
 
     turn = board.turn
     if turn == chess.WHITE:
