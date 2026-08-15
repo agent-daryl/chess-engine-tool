@@ -103,3 +103,8 @@ python3 -m unittest Chess_Engine.tests.test_chess -v
 - Train neural net evaluator (Leela Chess Zero-style) using AI-box GPUs
 - Client mode for connecting to remote servers
 - PGN export and game analysis
+
+
+---
+
+> **Privacy note:** Internal IP addresses originally present in this repository have been replaced with placeholder addresses in the `10.10.0.0/16` range to protect the owner's private network topology. Functionality is unchanged; configure real addresses via environment variables where supported.
